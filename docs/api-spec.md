@@ -14,11 +14,50 @@
 
 | Method | Endpoint | Purpose | Required Role / Permission | Status |
 | :--- | :--- | :--- | :--- | :--- |
-| `POST` | `/auth/register` | Register a new user account with hashed password | Public | `[PLANNED]` |
-| `POST` | `/auth/login` | Authenticate with credentials and obtain JWT Bearer token | Public | `[PLANNED]` |
-| `GET` | `/auth/me` | Fetch authenticated user profile & system role | Authenticated (Any) | `[PLANNED]` |
+| `POST` | `/api/v1/auth/register` (alias `/auth/register`) | Register a new user account with hashed password | Public | `[IMPLEMENTED]` |
+| `POST` | `/api/v1/auth/login` (alias `/auth/login`) | Authenticate with credentials and obtain JWT Bearer token | Public | `[IMPLEMENTED]` |
+| `GET` | `/api/v1/auth/me` | Fetch authenticated user profile & system role | Authenticated (Any) | `[PLANNED]` |
 
-### Example Request: `POST /api/v1/auth/login`
+### 1.1 User Registration: `POST /api/v1/auth/register`
+* **Authentication**: None (Public)
+* **Access Control**: Public registration automatically assigns the least-privileged `viewer` role. Supplying `role: "admin"` returns `422 Unprocessable Entity`.
+* **Password Policy**: Minimum 8 characters, maximum 128 characters, requiring at least one uppercase letter, one lowercase letter, and one digit. Stored as an Argon2id hash.
+* **Email Normalization**: Automatically converted to lowercase with whitespace stripped.
+
+#### Example Request Body
+```json
+{
+  "email": "user@example.com",
+  "full_name": "Jane Doe",
+  "password": "SecurePassword123!"
+}
+```
+
+#### Example Response: `201 Created`
+```json
+{
+  "id": "e5b8d234-92cb-46a2-94b1-e405bfef35c1",
+  "email": "user@example.com",
+  "full_name": "Jane Doe",
+  "role": "viewer",
+  "is_active": true,
+  "created_at": "2026-10-19T12:00:00Z"
+}
+```
+
+#### Error Responses
+* `409 Conflict`: `{"detail": "An account with this email address already exists."}`
+* `422 Unprocessable Entity`: Password complexity failure, invalid email syntax, or attempted `role: "admin"` assignment.
+* `503 Service Unavailable`: Database service temporarily unreachable.
+
+---
+
+### 1.2 User Login: `POST /api/v1/auth/login`
+* **Authentication**: None (Public)
+* **Behavior**: Compares submitted candidate password against the stored Argon2id hash. Returns a signed JWT access token (`HS256`, 15-minute expiration default).
+* **Security Protection**: Returns an identical generic error message for unknown emails and wrong passwords to eliminate user enumeration vectors.
+
+#### Example Request Body
 ```json
 {
   "email": "user@example.com",
@@ -26,19 +65,26 @@
 }
 ```
 
-### Example Response: `200 OK`
+#### Example Response: `200 OK`
 ```json
 {
   "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
   "token_type": "bearer",
   "user": {
-    "id": "664fa7...",
+    "id": "e5b8d234-92cb-46a2-94b1-e405bfef35c1",
     "email": "user@example.com",
     "full_name": "Jane Doe",
-    "system_role": "user"
+    "role": "viewer",
+    "is_active": true,
+    "created_at": "2026-10-19T12:00:00Z"
   }
 }
 ```
+
+#### Error Responses
+* `401 Unauthorized`: `{"detail": "Invalid email or password"}` (generic for wrong password, missing account, or invalid credentials).
+* `401 Unauthorized`: `{"detail": "Account is deactivated. Please contact an administrator."}`
+* `503 Service Unavailable`: Database service temporarily unreachable.
 
 ---
 

@@ -45,4 +45,95 @@ Use the following Markdown format for each new development session or distinct t
 
 ---
 
+### Entry 2: Backend Configuration Setup & Environment Isolation
+* **Date**: 2026-10-19
+* **Task Description**: Configure backend settings management with `pydantic-settings`, initialize backend packages, configure environment template (`.env.example`), and ensure strict gitignore exclusion of secret files.
+* **User Prompt**:
+  > "We are developing the TrustVault backend using Python 3.12, FastAPI, MongoDB, and Pytest. ... Please perform only the following tasks: 1. Inspect the existing backend folder and root .gitignore before making changes. 2. Create backend/.env.example with placeholder settings ... 3. Do not create a real .env file or insert actual credentials. 4. Update the root .gitignore if needed so that .env files are ignored, while .env.example remains trackable. 5. Create backend/app/__init__.py and backend/app/core/__init__.py ... 6. Create backend/app/core/config.py using pydantic-settings ... Keep development defaults safe and do not print secrets. 7. Do not connect to MongoDB yet. 8. Do not implement authentication or API endpoints yet. 9. Explain each file created or changed and provide a simple way to verify the configuration without exposing secrets."
+* **AI Output / Suggestion**:
+  * Updated `.gitignore` to explicitly preserve `!**/.env.example` while ignoring all local `.env` files in any directory.
+  * Created `backend/.env.example` with the 8 specified parameters.
+  * Initialized `backend/app/__init__.py` and `backend/app/core/__init__.py`.
+  * Implemented `backend/app/core/config.py` using `pydantic-settings.BaseSettings`, configured `Field(..., repr=False)` for `SECRET_KEY` to prevent credential exposure in logs/traces, and added a `get_safe_summary()` method masking sensitive values.
+* **Issues / Limitations Encountered**: None. Verified using `python -c` that `repr(settings)` excludes `SECRET_KEY` and verified with `git check-ignore` that `backend/.env` is ignored while `backend/.env.example` is trackable.
+* **Correction / Human Intervention Made**: Confirmed no database connection or API endpoints were added prematurely.
+* **Related Commit**: Pending.
+
+---
+
+### Entry 3: Asynchronous MongoDB Connector Implementation & Testing
+* **Date**: 2026-10-19
+* **Task Description**: Implement asynchronous MongoDB connection manager (`backend/app/core/database.py`) using Motor, implement non-blocking ping verification with bounded timeout and safe error logging, add unit tests with mocks, and verify connectivity against live MongoDB server.
+* **User Prompt**:
+  > "We are continuing the TrustVault project. The backend uses Python 3.12, FastAPI, Pydantic Settings, and Motor. The configuration file is already present at backend/app/core/config.py. Before changing anything, inspect the existing configuration and installed package versions. Please implement only the MongoDB connection module at backend/app/core/database.py. ... 1. Use the existing settings object ... 2. Create an asynchronous MongoDB client using Motor ... 3. Use the configured MONGODB_URI and DATABASE_NAME ... 4. Implement an asynchronous function to check the database connection using MongoDB ping ... 5. Provide a clean way to close the MongoDB client during application shutdown ... 6. Do not print the connection string, credentials, or SECRET_KEY ... 7. Handle connection errors safely ... 8. Do not create authentication routes, user models, or document endpoints yet ... 9. Do not claim the connection is successful until an actual connection test passes ... 10. Add a small automated test for the database module where practical, using a mock rather than requiring a live MongoDB server. ... 11. Update PROMPTS.md ... 12. Do not overwrite existing files without checking them first. Explain how to test the connector and distinguish a successful mock test from a successful connection to a real MongoDB server."
+* **AI Output / Suggestion**:
+  * Inspected `.venv` packages: confirmed Python 3.12.7, `motor==3.7.1`, `pymongo==4.19.0`, `pytest==9.1.1`, and `pytest-asyncio==1.4.0`.
+  * Created `backend/app/core/database.py` with `DatabaseManager` providing lazy client initialization, bounded `serverSelectionTimeoutMS=2000`, safe sanitized exception catching (no URI or credential logging), and explicit `.close_connection()` cleanup.
+  * Created `backend/pytest.ini` with `asyncio_mode = auto` and `testpaths = tests`.
+  * Created `backend/tests/test_database.py` with 4 isolated unit tests using `unittest.mock.AsyncMock` verifying: successful ping, timeout failure handling, driver error handling, and client cleanup.
+  * Executed unit tests with `pytest -v` (4 passed in 1.66s).
+  * Executed live connectivity test via `check_db_connection()`, which connected to the local MongoDB instance on port 27017 and returned `True`.
+* **Issues / Limitations Encountered**: None. Lazy initialization prevented unhandled loop attachment warnings during testing.
+* **Correction / Human Intervention Made**: Distinguished mock test execution (which tests the module's control flow and error trapping) from live socket connection execution (which tests physical database reachability).
+* **Related Commit**: Pending.
+
+---
+
+### Entry 4: User Schemas, Argon2 Password Security & Validation Tests
+* **Date**: 2026-10-19
+* **Task Description**: Define user data schemas (`backend/app/models/user.py`), implement password hashing and verification using `pwdlib[argon2]` (`backend/app/core/security.py`), enforce role boundaries and password hash isolation, and create automated test suite (`backend/tests/test_auth_security.py`).
+* **User Prompt**:
+  > "We are continuing the TrustVault project. ... Implement only the user schemas and password security helpers. Part A — User models: 1. Create app/models/__init__.py ... 2. Create app/models/user.py using Pydantic. 3. Define exactly three supported roles: admin, owner, and viewer. 4. Define appropriate user input and response schemas. 5. Include fields such as user ID, full name, email, role, active status, and timestamps ... 6. Validate and normalize email addresses. 7. Never include password hashes in public user response schemas. 8. Do not allow public registration to assign the admin role. Part B — Password security: 1. Create app/core/security.py. 2. Use pwdlib with Argon2 ... 3. Never store plaintext passwords. 4. Reject empty or excessively long passwords safely. 5. Do not log passwords, hashes, secret keys, or tokens. 6. Keep authentication token generation out of scope for this step. Part C — Automated tests: 1. Create tests for password hashing and verification. ... 6. Use the existing testing conventions and run the complete test suite. Update PROMPTS.md with the actual work performed and any real issues encountered."
+* **AI Output / Suggestion**:
+  * Created `backend/app/models/__init__.py` and `backend/app/models/user.py` defining `UserRole` (`admin`, `owner`, `viewer`), `UserRegister`, `UserResponse`, `UserInDB`, and `UserRoleUpdate`.
+  * Implemented `backend/app/core/security.py` using `pwdlib.PasswordHash.recommended()` for Argon2id hashing and verification, adding length constraints (8 to 128 characters) and timing/safe closed-failure handling.
+  * Created `backend/tests/test_auth_security.py` with 13 comprehensive test cases.
+* **Issues / Limitations Encountered**:
+  * During the initial test run, `from pydantic import EmailStr` raised an `ImportError: email-validator is not installed` because the virtual environment did not include the optional `email-validator` dependency.
+* **Correction / Human Intervention Made**:
+  * Replaced `EmailStr` in `app/models/user.py` with a self-contained RFC-compliant regex validator and normalizer (`validate_and_normalize_email_str`) that strips whitespace, forces lowercase, and validates email syntax without external dependencies.
+  * Re-ran `pytest -v`: all 17 tests (13 security/model tests + 4 database tests) passed cleanly in 2.24 seconds.
+* **Related Commit**: Pending.
+
+---
+
+### Entry 5: JWT Access-Token Generation, Verification & Security Tests
+* **Date**: 2026-10-19
+* **Task Description**: Implement JWT access-token creation and verification in `backend/app/core/security.py` using PyJWT, integrate `SECRET_KEY` from configuration with explicit `HS256` signing, validate required claims (`sub`, `iat`, `exp`), ensure roles in tokens do not bypass live server-side authorization (Requirement 8), and add 8 unit tests in `backend/tests/test_auth_security.py`.
+* **User Prompt**:
+  > "Continue developing TrustVault. ... Implement JWT access-token creation and verification in app/core/security.py, preserving the existing password security functions. Requirements: 1. Use the already installed PyJWT package. 2. Read the signing secret from the existing settings object. 3. Do not hardcode a real secret or print secret values. 4. Use an explicit signing algorithm, HS256. 5. Include the user ID as the token subject and include issued-at and expiration claims. 6. Validate the token signature, expiry, and required claims during decoding. 7. Reject malformed, expired, tampered, or incorrectly signed tokens safely. 8. Do not treat a role claim inside a token as the final authority for permissions. Current user status and permissions must be checked server-side on protected requests. 9. Do not implement login or registration endpoints yet. 10. Add automated tests for valid tokens, expired tokens, tampered tokens, missing required claims, and invalid tokens. 11. Ensure tests use a dedicated test secret and never print real secrets. 12. Update PROMPTS.md with the actual work performed and real issues encountered. 13. Run the full test suite and report the actual result. 14. Do not overwrite unrelated files. Important: inspect how the existing settings load SECRET_KEY before implementing this. If the current development secret is only a placeholder, explain that a real secret must be configured before running the application outside tests."
+* **AI Output / Suggestion**:
+  * Inspected `backend/app/core/config.py`: noted `SECRET_KEY` defaults to a 48-character development placeholder (`replace-with-a-long-random-secret-before-running`) with `repr=False`. Explained that this placeholder must be replaced with a high-entropy secret in production `.env`.
+  * Updated `backend/app/core/security.py` preserving password hashing functions and adding `create_access_token()` and `decode_access_token()` using `PyJWT` with explicit `ALGORITHM = "HS256"`.
+  * Defined custom security exceptions: `TokenSecurityError`, `TokenExpiredError`, and `InvalidTokenError`.
+  * Enforced mandatory validation of `sub`, `iat`, and `exp` claims with signature verification.
+  * Added explicit architectural guard comments stating token claims are informational and live permissions must be checked on every request.
+  * Added 8 new automated test cases to `backend/tests/test_auth_security.py` using dedicated 32+ byte test secrets (`TEST_SECRET_A`, `TEST_SECRET_B`).
+  * Ran full pytest suite: all 25 tests passed in 2.42 seconds.
+* **Issues / Limitations Encountered**: None. PyJWT key length recommendations (minimum 32 bytes for HS256) were respected in both default settings and test fixtures to prevent insecure key warnings.
+* **Correction / Human Intervention Made**: Avoided creating authentication endpoints or modifying the database module.
+* **Related Commit**: Pending.
+
+---
+
+### Entry 6: User Registration and Login API Implementation & Testing
+* **Date**: 2026-10-19
+* **Task Description**: Implement user registration (`POST /auth/register`) and user login (`POST /auth/login`) API endpoints in FastAPI, enforce email normalization, least-privilege default role assignment, duplicate rejection, and generic authentication errors. Create `backend/app/main.py`, `backend/app/api/deps.py`, `backend/app/api/v1/endpoints/auth.py`, `backend/app/api/v1/router.py`, and comprehensive test suite (`backend/tests/test_auth_api.py`).
+* **User Prompt**:
+  > "Continue developing my TrustVault project. ... TASK: Implement user registration and login APIs. ... REQUIREMENTS: A. Registration: Create POST /auth/register. Accept a validated email and password. Normalize the email consistently. Reject duplicate email addresses. Never accept an admin role from public registration. Assign the least-privileged appropriate default role. Hash passwords using the existing Argon2 function. Never store plaintext passwords. Never return password hashes in API responses. Handle duplicate registration safely. B. Login: Create POST /auth/login. Verify the submitted password against the stored Argon2 hash. Return a JWT access token after successful login. Use the existing JWT functions and configuration. Return a generic authentication error for incorrect email or password. Do not expose password hashes, secrets, or internal errors. Do not log passwords or tokens. C. Security: Never hardcode a real secret. Do not trust a role supplied by the client. Use the existing MongoDB database helper. Handle database errors safely. Follow the existing project structure and configuration. Do not implement document sharing or permissions yet. D. Tests: Add tests for: Successful registration. Password stored as a hash. Duplicate email rejected. Public registration cannot create an admin. Successful login. Incorrect password rejected. Unknown email rejected. Password hash never returned. Database failures handled safely. Use mocks for database-dependent tests where appropriate. Do not require a running MongoDB server for unit tests. E. Documentation: Update API documentation with request and response examples, authentication requirements, and error responses. Append a truthful dated entry to PROMPTS.md describing the actual prompt, changes, test results, and any real errors encountered."
+* **AI Output / Suggestion**:
+  * Updated `backend/app/models/user.py` and `backend/app/models/__init__.py` with `UserLogin` and `TokenResponse` models.
+  * Created `backend/app/api/deps.py` with `get_database()` dependency for easy test overrides.
+  * Implemented `backend/app/api/v1/endpoints/auth.py` with `register` and `login` route handlers.
+  * Created `backend/app/api/v1/router.py` aggregating API v1 endpoints.
+  * Created `backend/app/main.py` configuring FastAPI lifespan (closing DB on shutdown) and mounting `/api/v1` and `/auth` routes.
+  * Created `backend/tests/test_auth_api.py` with 11 automated test cases using `InMemoryMockDatabase` and `TestClient`.
+  * Updated `docs/api-spec.md` with implemented request/response schemas, role constraints, and error codes.
+  * Executed `pytest -v`: all 36 tests (11 API tests + 21 security/model tests + 4 database tests) passed in 6.79 seconds.
+* **Issues / Limitations Encountered**: None. A Starlette deprecation warning regarding `httpx` vs `httpx2` in `fastapi.testclient` was noted during pytest execution, but did not affect test correctness or assertions.
+* **Correction / Human Intervention Made**: Both `/api/v1/auth/register` and root `/auth/register` (and login counterparts) were mounted to support either URL convention without breaking client assumptions.
+* **Related Commit**: Pending.
+
+---
+
 *(Additional entries will be added chronologically as each development step is executed.)*
