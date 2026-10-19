@@ -136,4 +136,23 @@ Use the following Markdown format for each new development session or distinct t
 
 ---
 
+### Entry 7: Secure Authentication Dependency (`get_current_user`) Implementation & Verification
+* **Date**: 2026-10-19
+* **Task Description**: Implement `get_current_user` dependency in `backend/app/api/deps.py`, extract and validate Bearer tokens, enforce live MongoDB user lookup, enforce Requirement 8 (resolving role and active status from the database rather than trusting token claims), add `GET /api/v1/auth/me` endpoint, and create automated test suite (`backend/tests/test_auth_deps.py`).
+* **User Prompt**:
+  > "Continue developing my TrustVault project. ... TASK: Implement secure authentication for protected API endpoints. ... REQUIREMENTS: 1. Implement get_current_user in app/api/deps.py. 2. Extract the Bearer token using FastAPI's security utilities. 3. Decode and verify the JWT using the existing security module. 4. Reject missing, malformed, expired, and invalid tokens. 5. Extract the user identifier from the verified token subject. 6. Retrieve the current user record from MongoDB. 7. Reject tokens whose subject does not correspond to a valid current user. 8. Do not trust a role claim from the token as the authority. Read the current role and account status from the database. 9. Do not return password hashes in API responses or errors. 10. Fail safely if the database is unavailable. 11. Keep authentication separate from authorization. Do not implement document-sharing permissions yet. 12. Do not log tokens, passwords, or secrets. TESTS: Add automated tests for: Missing Authorization header. Malformed Bearer token. Expired token. Tampered token. Valid token for an existing user. Token for a nonexistent user. Database unavailable. Current role is taken from the database rather than trusting a role claim supplied in the token. Use mocked database dependencies where appropriate so unit tests do not require a running MongoDB server. DOCUMENTATION: Update docs/api-spec.md with authentication requirements. Add a truthful dated entry to PROMPTS.md describing the actual prompt, changes, test results, and any genuine errors encountered. VERIFICATION: Run the complete test suite using backend/.venv. Report actual passed, failed, and errored test counts. List all created and modified files. Explain how to test the authentication dependency locally."
+* **AI Output / Suggestion**:
+  * Implemented `get_current_user` in `backend/app/api/deps.py` with `HTTPBearer(auto_error=False)` and direct `Request.headers` inspection.
+  * Added `GET /api/v1/auth/me` endpoint in `backend/app/api/v1/endpoints/auth.py` returning `UserResponse`.
+  * Created `backend/tests/test_auth_deps.py` with 9 automated test cases covering: missing header, non-Bearer schemes, empty tokens, expired tokens, tampered signatures, existing user resolution, nonexistent users, deactivated users, database failures (503), and live database role resolution (Requirement 8).
+  * Updated `docs/api-spec.md` with section 1.3 documenting `GET /api/v1/auth/me` and marked the endpoint as `[IMPLEMENTED]`.
+* **Issues / Limitations Encountered**:
+  * During initial testing of `test_malformed_bearer_token`, supplying `Authorization: Basic ...` resulted in `HTTPBearer(auto_error=False)` yielding `None`, which triggered the generic "Authentication credentials were not provided" error rather than distinguishing the invalid authentication scheme.
+* **Correction / Human Intervention Made**:
+  * Updated `get_current_user` in `backend/app/api/deps.py` to inspect `request.headers.get("Authorization")` directly. This enables distinct handling for missing headers vs. non-Bearer schemes vs. empty parameter tokens.
+  * Re-ran `pytest -v`: all 45 tests (9 deps tests + 11 auth API tests + 21 security/model tests + 4 database tests) passed in 5.81 seconds.
+* **Related Commit**: Pending.
+
+---
+
 *(Additional entries will be added chronologically as each development step is executed.)*

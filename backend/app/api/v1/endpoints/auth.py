@@ -7,7 +7,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pymongo.errors import PyMongoError
-from app.api.deps import get_database
+from app.api.deps import get_current_user, get_database
 from app.core.security import create_access_token, hash_password, verify_password
 from app.models.user import (
     TokenResponse,
@@ -183,3 +183,18 @@ async def login(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database service is temporarily unavailable. Please try again later.",
         ) from None
+
+
+@router.get(
+    "/me",
+    response_model=UserResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Get current authenticated user profile",
+    description="Returns the profile and role of the currently authenticated user based on live database state.",
+)
+async def get_me(
+    current_user: UserResponse = Depends(get_current_user),
+) -> UserResponse:
+    """Return the profile of the verified active user."""
+    return current_user
+

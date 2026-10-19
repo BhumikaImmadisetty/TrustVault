@@ -16,7 +16,7 @@
 | :--- | :--- | :--- | :--- | :--- |
 | `POST` | `/api/v1/auth/register` (alias `/auth/register`) | Register a new user account with hashed password | Public | `[IMPLEMENTED]` |
 | `POST` | `/api/v1/auth/login` (alias `/auth/login`) | Authenticate with credentials and obtain JWT Bearer token | Public | `[IMPLEMENTED]` |
-| `GET` | `/api/v1/auth/me` | Fetch authenticated user profile & system role | Authenticated (Any) | `[PLANNED]` |
+| `GET` | `/api/v1/auth/me` (alias `/auth/me`) | Fetch authenticated user profile & system role | Authenticated (Bearer Token) | `[IMPLEMENTED]` |
 
 ### 1.1 User Registration: `POST /api/v1/auth/register`
 * **Authentication**: None (Public)
@@ -84,6 +84,38 @@
 #### Error Responses
 * `401 Unauthorized`: `{"detail": "Invalid email or password"}` (generic for wrong password, missing account, or invalid credentials).
 * `401 Unauthorized`: `{"detail": "Account is deactivated. Please contact an administrator."}`
+* `503 Service Unavailable`: Database service temporarily unreachable.
+
+---
+
+### 1.3 Current User Profile: `GET /api/v1/auth/me`
+* **Authentication**: Required (`Authorization: Bearer <access_token>`)
+* **Live Role Verification**: The active user role and account status are dynamically resolved from the MongoDB database on every request. Token claims (such as a forged role claim) are never trusted as authorization grants.
+
+#### Request Headers
+```http
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+```
+
+#### Example Response: `200 OK`
+```json
+{
+  "id": "e5b8d234-92cb-46a2-94b1-e405bfef35c1",
+  "email": "user@example.com",
+  "full_name": "Jane Doe",
+  "role": "viewer",
+  "is_active": true,
+  "created_at": "2026-10-19T12:00:00Z"
+}
+```
+
+#### Error Responses
+* `401 Unauthorized`: `{"detail": "Authentication credentials were not provided"}` (Missing Authorization header).
+* `401 Unauthorized`: `{"detail": "Invalid authentication scheme; Bearer token required"}` (Non-Bearer scheme).
+* `401 Unauthorized`: `{"detail": "Authentication token has expired"}`.
+* `401 Unauthorized`: `{"detail": "Could not validate credentials"}` (Tampered token or signature mismatch).
+* `401 Unauthorized`: `{"detail": "User account does not exist or has been removed"}`.
+* `401 Unauthorized`: `{"detail": "Account is deactivated"}`.
 * `503 Service Unavailable`: Database service temporarily unreachable.
 
 ---
