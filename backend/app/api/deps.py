@@ -144,3 +144,18 @@ async def get_current_user(
         is_active=user_doc.get("is_active", True),
         created_at=user_doc["created_at"],
     )
+
+
+async def require_admin_user(
+    current_user: UserResponse = Depends(get_current_user),
+) -> UserResponse:
+    """
+    Dependency ensuring the authenticated user has administrator privileges.
+    Evaluates live role from the database. Rejects non-admin users with 403.
+    """
+    if current_user.role != UserRole.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied: Administrator privileges required.",
+        )
+    return current_user

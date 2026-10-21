@@ -87,3 +87,34 @@ async def check_db_connection() -> bool:
 async def close_mongo_connection() -> None:
     """Convenience function to shut down the client."""
     await db_manager.close_connection()
+
+
+async def init_indexes(db: AsyncIOMotorDatabase) -> None:
+    """
+    Ensure essential MongoDB indexes exist.
+    Prevents duplicate permission grants via unique compound index on (document_id, grantee_id).
+    Safe and idempotent; catches driver errors if database is in mock or offline mode.
+    """
+    try:
+        if hasattr(db, "__getitem__"):
+            permissions_col = db["permissions"]
+            if hasattr(permissions_col, "create_index"):
+                await permissions_col.create_index(
+                    [("document_id", 1), ("grantee_id", 1)],
+                    unique=True,
+                    name="uniq_document_grantee",
+                )
+                await permissions_col.create_index([("grantee_id", 1)], name="idx_grantee")
+                await permissions_col.create_index([("document_id", 1)], name="idx_document")
+            docs_col = db["documents"]
+            if hasattr(docs_col, "create_index"):
+                await docs_col.create_index([("owner_id", 1), ("status", 1)], name="idx_owner_status")
+            audit_col = db["audit_logs"]
+            if hasattr(audit_col, "create_index"):
+                await audit_col.create_index([("timestamp", -1)], name="idx_audit_timestamp")
+                await audit_col.create_index([("action", 1), ("timestamp", -1)], name="idx_audit_action_time")
+                await audit_col.create_index([("actor_id", 1), ("timestamp", -1)], name="idx_audit_actor_time")
+                await audit_col.create_index([("document_id", 1), ("timestamp", -1)], name="idx_audit_doc_time")
+                await audit_col.create_index([("outcome", 1), ("timestamp", -1)], name="idx_audit_outcome_time")
+    except Exception as exc:
+        logger.warning("Index initialization skipped or failed: %s", exc.__class__.__name__)

@@ -4,11 +4,13 @@ Provides user registration and login functionality.
 """
 
 import logging
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pymongo.errors import PyMongoError
 from app.api.deps import get_current_user, get_database
+from app.core.audit import record_audit_event
 from app.core.security import create_access_token, hash_password, verify_password
+from app.models.audit import AuditAction, AuditOutcome
 from app.models.user import (
     TokenResponse,
     UserInDB,
@@ -112,6 +114,7 @@ async def register(
 )
 async def login(
     credentials: UserLogin,
+    request: Request,
     db: AsyncIOMotorDatabase = Depends(get_database),
 ) -> TokenResponse:
     """
@@ -123,6 +126,7 @@ async def login(
       to eliminate user enumeration vectors.
     - Rejects deactivated user accounts.
     - Does not log passwords or tokens.
+    - Records audit trail events for successful and failed login attempts.
     """
     normalized_email = credentials.email.strip().lower()
     generic_auth_error = HTTPException(
@@ -134,31 +138,75 @@ async def login(
     try:
         user_doc = await db["users"].find_one({"email": normalized_email})
         if user_doc is None:
-            # Email not found: return generic error to prevent enumeration
+            # Email not found: record denied audit event and return generic error
+            await record_audit_event(
+                db,
+                action=AuditAction.LOGIN,
+                outcome=AuditOutcome.DENIED,
+                actor_id=None,
+                status_code=401,
+                reason="invalid_credentials",
+                request=request,
+            )
             raise generic_auth_error
 
+        user_id = str(user_doc.get("id") or user_doc.get("_id"))
         stored_hash = user_doc.get("hashed_password")
         if not stored_hash or not isinstance(stored_hash, str):
+            await record_audit_event(
+                db,
+                action=AuditAction.LOGIN,
+                outcome=AuditOutcome.DENIED,
+                actor_id=user_id,
+                status_code=401,
+                reason="invalid_credentials",
+                request=request,
+            )
             raise generic_auth_error
 
         # Verify candidate password against Argon2 hash
         if not verify_password(credentials.password, stored_hash):
-            # Password mismatch: return identical generic error
+            await record_audit_event(
+                db,
+                action=AuditAction.LOGIN,
+                outcome=AuditOutcome.DENIED,
+                actor_id=user_id,
+                status_code=401,
+                reason="invalid_credentials",
+                request=request,
+            )
             raise generic_auth_error
 
         # Ensure account is active
         if not user_doc.get("is_active", True):
+            await record_audit_event(
+                db,
+                action=AuditAction.LOGIN,
+                outcome=AuditOutcome.DENIED,
+                actor_id=user_id,
+                status_code=401,
+                reason="account_deactivated",
+                request=request,
+            )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Account is deactivated. Please contact an administrator.",
                 headers={"WWW-Authenticate": "Bearer"},
             )
 
-        user_id = str(user_doc.get("id") or user_doc.get("_id"))
-
         # Issue JWT access token with user_id as subject
         token = create_access_token(subject=user_id)
         logger.info("User ID %s authenticated successfully.", user_id)
+
+        # Record successful login audit event
+        await record_audit_event(
+            db,
+            action=AuditAction.LOGIN,
+            outcome=AuditOutcome.SUCCESS,
+            actor_id=user_id,
+            status_code=200,
+            request=request,
+        )
 
         user_response = UserResponse(
             id=user_id,

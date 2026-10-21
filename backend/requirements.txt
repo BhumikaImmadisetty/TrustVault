@@ -1,0 +1,10 @@
+fastapi==0.146.0
+uvicorn==0.54.0
+motor==3.7.1
+pymongo
+pydantic
+pydantic-settings==2.16.0
+python-dotenv
+pwdlib[argon2]==0.3.1
+PyJWT==2.15.1
+python-multipart==0.0.32

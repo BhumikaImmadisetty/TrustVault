@@ -1,7 +1,8 @@
-# TrustVault - Preliminary API Specification
+# TrustVault - API Specification
 
-> **Document Status**: **Preliminary Planned Specification**  
-> *Notice: All endpoints listed below are planned for implementation in subsequent phases. None are currently active or implemented.*
+> **Document Status**: **Partially Implemented**
+> Authentication endpoints and document upload/listing are implemented and tested.
+> Sharing, download streaming, deletion, permission management, and audit endpoints are planned.
 
 ---
 
@@ -124,16 +125,123 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 
 | Method | Endpoint | Purpose | Required Role / Permission | Status |
 | :--- | :--- | :--- | :--- | :--- |
-| `POST` | `/documents/upload` | Upload a new document into private vault storage | Authenticated User (becomes Owner) | `[PLANNED]` |
-| `GET` | `/documents` | List documents owned by or explicitly shared with user | Authenticated User | `[PLANNED]` |
-| `GET` | `/documents/{id}` | Get metadata for a specific document | Document Owner or Active Viewer | `[PLANNED]` |
-| `GET` | `/documents/{id}/download` | Stream binary content of document | Document Owner or Active Viewer | `[PLANNED]` |
-| `DELETE` | `/documents/{id}` | Permanently delete document file and metadata | Document Owner | `[PLANNED]` |
+| `POST` | `/api/v1/documents/upload` | Upload a document into private server-side storage | Authenticated User (becomes Owner) | `[IMPLEMENTED]` |
+| `GET` | `/api/v1/documents/` | List documents owned by the authenticated user | Authenticated User | `[IMPLEMENTED]` |
+| `GET` | `/api/v1/documents/{id}` | Get metadata for a specific document | Document Owner or Active Viewer | `[PLANNED]` |
+| `GET` | `/api/v1/documents/{id}/download` | Stream binary document content securely | Document Owner or Active Viewer | `[PLANNED]` |
+| `DELETE` | `/api/v1/documents/{id}` | Soft-delete document file and metadata | Document Owner | `[PLANNED]` |
 
-### Notes on `/documents/{id}/download`:
-* Evaluates active permission in MongoDB before sending byte 1.
-* Returns standard security headers (`Cache-Control: no-store, private`, `Content-Disposition: attachment`).
-* Generates an audit record for both `200 OK` and `403 Forbidden` outcomes.
+---
+
+### 2.1 Upload Document: `POST /api/v1/documents/upload`
+* **Authentication**: Required (`Authorization: Bearer <access_token>`)
+* **Request**: `multipart/form-data` with a `file` field and an optional `description` query parameter (max 500 characters).
+* **Ownership**: The uploaded document is automatically attributed to the authenticated user. The uploader is assigned as the sole owner.
+* **File Size Limit**: Configurable via `MAX_UPLOAD_SIZE_MB` (default: 10 MB). Files larger than the configured limit are rejected with `413`.
+* **Allowed MIME Types** (validated against a server-side allowlist):
+  * `application/pdf`
+  * `application/msword`
+  * `application/vnd.openxmlformats-officedocument.wordprocessingml.document`
+  * `application/vnd.ms-excel`
+  * `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`
+  * `text/plain`
+  * `image/jpeg`
+  * `image/png`
+* **Storage Security**:
+  * Files are stored under a server-controlled UUID-based filename. The original filename is retained in metadata only and is never used as the storage path.
+  * Each owner's files are isolated in a per-owner subdirectory under the configured `STORAGE_PATH`.
+  * The server-side `storage_path` is **never** returned in any API response.
+  * If MongoDB insertion fails after a file is written, the stored file is deleted to prevent orphaned storage.
+
+#### Example Request (multipart/form-data)
+```
+POST /api/v1/documents/upload?description=Q3+Report HTTP/1.1
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+Content-Type: multipart/form-data; boundary=----FormBoundary
+
+------FormBoundary
+Content-Disposition: form-data; name="file"; filename="report.pdf"
+Content-Type: application/pdf
+
+<binary file content>
+------FormBoundary--
+```
+
+#### Example Response: `201 Created`
+```json
+{
+  "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "filename": "report.pdf",
+  "content_type": "application/pdf",
+  "size_bytes": 204800,
+  "owner_id": "e5b8d234-92cb-46a2-94b1-e405bfef35c1",
+  "status": "active",
+  "description": "Q3 Report",
+  "created_at": "2026-10-19T12:00:00Z"
+}
+```
+
+> **Note**: `storage_path` is never present in the response. Its absence is verified by automated tests.
+
+#### Error Responses
+* `400 Bad Request`: `{"detail": "Uploaded file is empty."}` — Zero-byte uploads rejected.
+* `400 Bad Request`: `{"detail": "Failed to read uploaded file."}` — File read error.
+* `401 Unauthorized`: Missing, expired, or invalid Bearer token.
+* `413 Request Entity Too Large`: File exceeds `MAX_UPLOAD_SIZE_MB`.
+* `415 Unsupported Media Type`: MIME type not in the server-side allowlist.
+* `500 Internal Server Error`: `{"detail": "Document storage failed. Please try again later."}` — Filesystem write failure.
+* `503 Service Unavailable`: MongoDB write failure (stored file is rolled back automatically).
+
+---
+
+### 2.2 List Own Documents: `GET /api/v1/documents/`
+* **Authentication**: Required (`Authorization: Bearer <access_token>`)
+* **Scope**: Returns only documents where `owner_id` matches the authenticated user's ID. Cross-user document visibility is never granted by this endpoint.
+* **Filtering**: Soft-deleted documents (`status: "deleted"`) are excluded from all results by default.
+* **Pagination**: Supports `skip` (default: 0, min: 0) and `limit` (default: 20, min: 1, max: 100) query parameters.
+* **Sorting**: Results are returned sorted by `created_at` descending (newest first).
+
+#### Example Request
+```http
+GET /api/v1/documents/?skip=0&limit=20 HTTP/1.1
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+```
+
+#### Example Response: `200 OK`
+```json
+{
+  "documents": [
+    {
+      "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "filename": "report.pdf",
+      "content_type": "application/pdf",
+      "size_bytes": 204800,
+      "owner_id": "e5b8d234-92cb-46a2-94b1-e405bfef35c1",
+      "status": "active",
+      "description": "Q3 Report",
+      "created_at": "2026-10-19T12:00:00Z"
+    }
+  ],
+  "total": 1
+}
+```
+
+> **Note**: `storage_path` is never present in any document object in the listing response.
+
+#### Error Responses
+* `401 Unauthorized`: Missing, expired, or invalid Bearer token.
+* `503 Service Unavailable`: Database service temporarily unreachable.
+
+---
+
+### 2.3 Get Document Metadata: `GET /api/v1/documents/{id}` `[PLANNED]`
+_Not yet implemented._
+
+### 2.4 Download Document: `GET /api/v1/documents/{id}/download` `[PLANNED]`
+_Not yet implemented. Will evaluate active permissions before streaming any bytes._
+
+### 2.5 Delete Document: `DELETE /api/v1/documents/{id}` `[PLANNED]`
+_Not yet implemented._
 
 ---
 
@@ -163,21 +271,44 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 
 | Method | Endpoint | Purpose | Required Role / Permission | Status |
 | :--- | :--- | :--- | :--- | :--- |
-| `GET` | `/audit/document/{id}` | Retrieve audit trail for a specific document | Document Owner | `[PLANNED]` |
-| `GET` | `/audit/global` | Retrieve system-wide audit logs with filters | Admin Role Only | `[PLANNED]` |
+| `GET` | `/api/v1/audit/` | Retrieve paginated audit trail events with filtering by action, outcome, actor, document, and date | Admin Role Only (`role: "admin"`) | `[IMPLEMENTED]` |
 
-### Example Audit Record:
+### 4.1 List Audit Events: `GET /api/v1/audit/`
+* **Authentication**: Required (`Authorization: Bearer <access_token>`)
+* **Access Control**: Strictly restricted to users with `role: "admin"` via live database role inspection (`require_admin_user`). Regular users (`owner`, `viewer`) receive `403 Forbidden`. Unauthenticated requests receive `401 Unauthorized`.
+* **Query Parameters**:
+  * `skip` (int, default `0`, ge `0`): Number of audit records to skip.
+  * `limit` (int, default `50`, ge `1`, le `200`): Maximum number of records to return.
+  * `action` (string, optional): Filter by action name (e.g. `auth.login`, `document.upload`, `document.download`, `document.update`, `document.delete`, `permission.grant`, `permission.revoke`).
+  * `outcome` (string, optional): Filter by outcome (`success` or `denied`).
+  * `actor_id` (string, optional): Filter by actor user ID.
+  * `document_id` (string, optional): Filter by target document ID.
+  * `start_date` (datetime, optional): Filter events on or after UTC datetime (ISO 8601).
+  * `end_date` (datetime, optional): Filter events on or before UTC datetime (ISO 8601).
+* **Privacy & Security Guarantees**:
+  * Strictly excludes passwords, password hashes, JWT tokens, Authorization headers, document contents, and server filesystem paths.
+  * Reasons and identifiers are actively sanitized and redacted.
+  * Indexed on `timestamp`, `(action, timestamp)`, `(actor_id, timestamp)`, `(document_id, timestamp)`, and `(outcome, timestamp)`.
+
+#### Example Response: `200 OK`
 ```json
 {
-  "id": "664fb1...",
-  "timestamp": "2026-10-19T10:45:00Z",
-  "actor_user_id": "664fa7...",
-  "actor_email": "attacker@example.com",
-  "action": "DOCUMENT_DOWNLOAD",
-  "document_id": "664fc9...",
-  "status": "DENIED",
-  "reason": "REVOKED_ACCESS",
-  "ip_address": "192.168.1.105"
+  "events": [
+    {
+      "id": "c1f7f02d-9eb0-4dbb-8260-ae61244e830c",
+      "timestamp": "2026-10-20T11:45:00Z",
+      "actor_id": "user-abc-123",
+      "action": "document.download",
+      "document_id": "doc-xyz-789",
+      "outcome": "denied",
+      "status_code": 403,
+      "reason": "access_denied",
+      "correlation_id": "corr-req-001"
+    }
+  ],
+  "total": 1,
+  "skip": 0,
+  "limit": 50
 }
 ```
 
@@ -197,8 +328,13 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 * `200 OK`: Request succeeded.
 * `201 Created`: Resource successfully created (e.g. document uploaded or account registered).
 * `204 No Content`: Successful deletion or revocation with no response body.
-* `400 Bad Request`: Validation failure or malformed payload.
+* `400 Bad Request`: Validation failure, malformed payload, or empty file upload.
 * `401 Unauthorized`: Missing, expired, or invalid authentication credentials.
 * `403 Forbidden`: Authenticated user lacks permission to access the resource.
 * `404 Not Found`: Resource does not exist or user lacks visibility.
-* `413 Payload Too Large`: Uploaded file exceeds configured size limit.
+* `409 Conflict`: Duplicate resource (e.g. email address already registered).
+* `413 Request Entity Too Large`: Uploaded file exceeds the configured `MAX_UPLOAD_SIZE_MB` limit.
+* `415 Unsupported Media Type`: Uploaded file MIME type is not in the server-side allowlist.
+* `422 Unprocessable Entity`: Request body fails schema validation (e.g. password complexity, invalid email, forbidden role).
+* `500 Internal Server Error`: Filesystem write failure during document storage.
+* `503 Service Unavailable`: Database service temporarily unreachable.
