@@ -323,7 +323,43 @@ _Not yet implemented._
 
 ---
 
-## 6. HTTP Status Code Conventions
+## 6. System & Health Endpoints
+
+| Method | Endpoint | Purpose | Required Role / Permission | Status |
+| :--- | :--- | :--- | :--- | :--- |
+| `GET` | `/health` | Service and MongoDB connectivity health check | Public | `[IMPLEMENTED]` |
+
+### 6.1 Service Health Check: `GET /health`
+* **Authentication**: None (Public)
+* **Access Control**: Publicly accessible for health probes, load balancers, and container orchestrators.
+* **Database Connectivity Check**: Directly performs a lightweight ping check to MongoDB using `check_db_connection()`.
+* **Security & Privacy Guarantees**:
+  * Never exposes database credentials, usernames, passwords, hostnames, ports, connection URIs, internal file paths, or exception stack traces.
+  * Only reports coarse status (`healthy` / `unhealthy`), database state (`connected` / `disconnected`), application name, and environment.
+
+#### Example Response: `200 OK` (Healthy)
+```json
+{
+  "status": "healthy",
+  "database": "connected",
+  "app": "TrustVault",
+  "env": "development"
+}
+```
+
+#### Example Response: `503 Service Unavailable` (Database Unreachable or Offline)
+```json
+{
+  "status": "unhealthy",
+  "database": "disconnected",
+  "app": "TrustVault",
+  "env": "development"
+}
+```
+
+---
+
+## 7. HTTP Status Code Conventions
 
 * `200 OK`: Request succeeded.
 * `201 Created`: Resource successfully created (e.g. document uploaded or account registered).
@@ -337,4 +373,4 @@ _Not yet implemented._
 * `415 Unsupported Media Type`: Uploaded file MIME type is not in the server-side allowlist.
 * `422 Unprocessable Entity`: Request body fails schema validation (e.g. password complexity, invalid email, forbidden role).
 * `500 Internal Server Error`: Filesystem write failure during document storage.
-* `503 Service Unavailable`: Database service temporarily unreachable.
+* `503 Service Unavailable`: Database service temporarily unreachable or unhealthy.

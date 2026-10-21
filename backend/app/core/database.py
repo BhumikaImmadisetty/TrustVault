@@ -47,7 +47,11 @@ class DatabaseManager:
             database = self.get_database()
             # Send lightweight ping command to admin/primary database
             response = await database.command("ping")
-            if response and response.get("ok") == 1.0 or response.get("ok") == 1:
+            if (
+                isinstance(response, dict)
+                and not isinstance(response.get("ok"), bool)
+                and response.get("ok") in (1, 1.0)
+            ):
                 logger.info("MongoDB ping succeeded.")
                 return True
             return False
@@ -93,8 +97,12 @@ async def init_indexes(db: AsyncIOMotorDatabase) -> None:
     """
     Ensure essential MongoDB indexes exist.
     Prevents duplicate permission grants via unique compound index on (document_id, grantee_id).
-    Safe and idempotent; catches driver errors if database is in mock or offline mode.
+    Safe and idempotent; raises on failure after logging sanitized error.
     """
+    if db is None:
+        logger.error("Database index initialization failed: database instance is None")
+        raise ValueError("Database instance cannot be None for index initialization")
+
     try:
         if hasattr(db, "__getitem__"):
             permissions_col = db["permissions"]
@@ -117,4 +125,5 @@ async def init_indexes(db: AsyncIOMotorDatabase) -> None:
                 await audit_col.create_index([("document_id", 1), ("timestamp", -1)], name="idx_audit_doc_time")
                 await audit_col.create_index([("outcome", 1), ("timestamp", -1)], name="idx_audit_outcome_time")
     except Exception as exc:
-        logger.warning("Index initialization skipped or failed: %s", exc.__class__.__name__)
+        logger.error("Essential database index initialization failed: %s", exc.__class__.__name__)
+        raise
