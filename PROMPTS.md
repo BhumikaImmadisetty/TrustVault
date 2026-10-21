@@ -155,4 +155,43 @@ Use the following Markdown format for each new development session or distinct t
 
 ---
 
+### Entry 8: Document Metadata Models, Private Storage & Authenticated Upload/Listing
+* **Date**: 2026-10-19
+* **Task Description**: Implement Stage 1 of document management — Pydantic document models, private server-side file storage with UUID-based filenames, authenticated document upload (`POST /api/v1/documents/upload`) and listing (`GET /api/v1/documents/`) endpoints, and a comprehensive automated test suite (`backend/tests/test_documents.py`).
+* **User Prompt**:
+  > "Continue developing TrustVault. ... TASK: Implement the first stage of secure document management: document metadata models, private local file storage, and authenticated document upload and listing. ... A. Document metadata: Create a document model ... B. Private storage: ... generate a UUID-based server-side filename ... never use the original filename as the storage path ... do not return the storage path in any API response ... create a per-owner subdirectory ... C. Upload endpoint: POST /api/v1/documents/upload ... D. Listing endpoint: GET /api/v1/documents/ ... E. Tests: ... storage_path excluded from all responses ... unauthenticated access rejected ... disallowed MIME type rejected ... empty file rejected ... database failure returns 503 ... pagination ..."
+* **AI Output / Suggestion**:
+  * Created `backend/app/models/document.py` defining `DocumentStatus` enum (`active`, `archived`, `deleted`), `DocumentInDB` (internal, includes `storage_path`), `DocumentResponse` (public, excludes `storage_path`), and `DocumentListResponse`.
+  * Created `backend/app/api/v1/endpoints/documents.py` implementing:
+    * `POST /api/v1/documents/upload`: reads file up to `MAX_UPLOAD_SIZE_MB + 1` bytes, rejects empty files (`400`), rejects disallowed MIME types against a server-side allowlist (`415`), stores file under UUID-based filename in per-owner subdirectory, inserts metadata to MongoDB, rolls back stored file on DB failure, never returns `storage_path`.
+    * `GET /api/v1/documents/`: scoped to `owner_id == current_user.id`, excludes `status: deleted`, supports `skip`/`limit` pagination, sorted by `created_at` descending, never returns `storage_path`.
+  * Updated `backend/app/api/v1/router.py` to mount `documents.router` at prefix `/documents`.
+  * Created `backend/tests/test_documents.py` with 17 automated tests covering: valid PDF upload, `storage_path` exclusion from both upload and listing responses, correct `owner_id` attribution, optional description, disallowed MIME type rejection, empty file rejection, unauthenticated access rejection (upload and listing), DB failure on upload (`503`), physical file storage verification, UUID storage filename verification (path traversal sequence `../../../etc/passwd` in filename does not reach filesystem), empty listing, owner-scoped listing, soft-deleted document exclusion, `storage_path` exclusion from listing, pagination, unauthenticated listing rejection, DB failure on listing (`503`).
+  * Ran full test suite: **62 tests passed, 0 failed** (command: `.venv\Scripts\python.exe -m pytest tests/ -v --tb=short`). Execution time: 7.32 seconds.
+* **Issues / Limitations Encountered**: None. All 17 new tests passed on the first run.
+* **Correction / Human Intervention Made**: None required.
+* **Related Commit**: Pending.
+
+---
+
+### Entry 9: Documentation Review & Correction (api-spec.md, security-model.md, PROMPTS.md)
+* **Date**: 2026-10-19
+* **Task Description**: Review `docs/api-spec.md`, `docs/security-model.md`, and `PROMPTS.md` against the actual Entry 8 implementation. Correct inaccuracies and add missing information without touching any Python code.
+* **User Prompt**:
+  > "Review the document-management implementation you just completed. Do not modify the Python code yet. Check whether docs/api-spec.md, docs/security-model.md, and PROMPTS.md have been updated to accurately describe the new document model, upload/list endpoints, ownership restrictions, private storage, validation, and tests. Update any missing documentation. Do not mark sharing, downloads, deletion, or audit logging as implemented if those features do not exist yet. Record only actual work and actual test results in PROMPTS.md."
+* **AI Output / Suggestion**:
+  * **`docs/api-spec.md`**: Corrected document endpoint table — `POST /api/v1/documents/upload` and `GET /api/v1/documents/` marked `[IMPLEMENTED]`. Added detailed sections 2.1 and 2.2 with request/response examples, MIME allowlist, storage security notes, pagination parameters, and error code tables. Added subsections 2.3–2.5 as `[PLANNED]` stubs for get-by-id, download, and delete. Added `415`, `422`, `409`, and `500` to the HTTP status conventions table. Corrected the status banner from "all planned" to "partially implemented".
+  * **`docs/security-model.md`**: Corrected three factual errors present since Entry 4:
+    1. Section 2.1 stated "salted bcrypt" — corrected to **Argon2id via pwdlib** (the actual library used since Entry 4).
+    2. Section 2.2 JWT payload example included a `role` claim — removed, as the actual implementation puts only `sub`, `iat`, and `exp` in the token.
+    3. Section 2.2 stated "30–60 minute" token lifetime — corrected to **15 minutes** (the actual `ACCESS_TOKEN_EXPIRE_MINUTES` default).
+    * Added new **Section 4: Private Document Storage Security** covering storage location, UUID filename design, per-owner directories, `storage_path` exclusion from responses, MIME allowlist, size/empty validation, orphan rollback, and owner-scoped listing. Renumbered former sections 4 and 5 to 5 and 6 and marked them `[PLANNED]`.
+  * **`PROMPTS.md`**: Added Entry 8 and Entry 9 with accurate descriptions of actual work performed and actual test results.
+* **Issues / Limitations Encountered**:
+  * `docs/security-model.md` contained three inaccuracies that had been present since Entry 4 (incorrect hashing algorithm, incorrect JWT claims, incorrect token lifetime). These were not caught until this explicit documentation review.
+* **Correction / Human Intervention Made**: All three inaccuracies were corrected in this session. Future documentation entries should be written immediately after implementation to avoid drift.
+* **Related Commit**: Pending.
+
+---
+
 *(Additional entries will be added chronologically as each development step is executed.)*

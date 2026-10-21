@@ -5,7 +5,9 @@
 # Environment variables & secrets
 .env
 .env.*
+.env*.local
 !.env.example
+!**/.env.example
 
 # Python virtual environments
 .venv/
@@ -63,3 +65,6 @@ dump/
 .DS_Store
 Thumbs.db
 desktop.ini
+.freebuff/
+backend/.env
+frontend/.env
