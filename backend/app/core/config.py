@@ -1,6 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, Literal
+from typing import Any, Dict, List, Literal
+from urllib.parse import urlsplit
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -42,6 +43,10 @@ class Settings(BaseSettings):
         gt=0,
         description="Maximum allowed file upload size in megabytes",
     )
+    CORS_ORIGINS: List[str] = Field(
+        default_factory=lambda: ["http://localhost:5173", "http://127.0.0.1:5173"],
+        description="Allowed CORS origins for the frontend application",
+    )
 
     model_config = SettingsConfigDict(
         # Looks for .env in current working directory and in backend/.env
@@ -63,6 +68,83 @@ class Settings(BaseSettings):
         if v <= 0:
             raise ValueError("ACCESS_TOKEN_EXPIRE_MINUTES must be greater than 0")
         return v
+
+    @field_validator("CORS_ORIGINS", mode="before")
+    @classmethod
+    def validate_cors_origins(cls, v: Any) -> List[str]:
+        if v is None:
+            return ["http://localhost:5173", "http://127.0.0.1:5173"]
+
+        raw_origins: List[str] = []
+        if isinstance(v, str):
+            stripped = v.strip()
+            if not stripped:
+                raise ValueError("CORS_ORIGINS must contain at least one valid origin.")
+            if stripped.startswith("[") and stripped.endswith("]"):
+                import json
+                try:
+                    parsed_json = json.loads(stripped)
+                    if isinstance(parsed_json, list):
+                        raw_origins = [str(item) for item in parsed_json]
+                    else:
+                        raw_origins = [stripped]
+                except Exception:
+                    raw_origins = stripped.split(",")
+            else:
+                raw_origins = stripped.split(",")
+        elif isinstance(v, (list, tuple, set)):
+            raw_origins = [str(item) for item in v]
+        else:
+            raise ValueError(
+                f"Invalid CORS_ORIGINS type: {type(v).__name__}. Expected string or list."
+            )
+
+        normalized_origins: List[str] = []
+        for raw in raw_origins:
+            origin = raw.strip()
+            if not origin:
+                continue
+
+            if origin == "*" or "*" in origin:
+                raise ValueError(
+                    f"Wildcard CORS origin '{origin}' is not allowed when credentials are enabled."
+                )
+
+            parsed = urlsplit(origin)
+            if not parsed.scheme or parsed.scheme.lower() not in ("http", "https"):
+                raise ValueError(
+                    f"Invalid CORS origin scheme in '{origin}'. Only 'http' and 'https' are permitted."
+                )
+
+            if not parsed.netloc:
+                raise ValueError(
+                    f"Invalid CORS origin '{origin}': missing host or domain."
+                )
+
+            if parsed.path and parsed.path != "/":
+                raise ValueError(
+                    f"Invalid CORS origin '{origin}': origins must not contain a path."
+                )
+
+            if parsed.query or parsed.fragment:
+                raise ValueError(
+                    f"Invalid CORS origin '{origin}': origins must not contain query parameters or fragments."
+                )
+
+            if any(char in parsed.netloc for char in (" ", "\t", "\r", "\n", "@")):
+                raise ValueError(
+                    f"Invalid CORS origin '{origin}': contains illegal characters or user credentials."
+                )
+
+            # Avoid trailing-slash mismatch: standard Origin headers do not have a trailing slash
+            normalized = f"{parsed.scheme.lower()}://{parsed.netloc.lower()}"
+            if normalized not in normalized_origins:
+                normalized_origins.append(normalized)
+
+        if not normalized_origins:
+            raise ValueError("CORS_ORIGINS must contain at least one valid origin.")
+
+        return normalized_origins
 
     @property
     def max_upload_size_bytes(self) -> int:
