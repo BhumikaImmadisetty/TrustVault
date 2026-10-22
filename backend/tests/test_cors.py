@@ -179,3 +179,132 @@ def test_cors_production_origin_configured_middleware():
             },
         )
         assert "access-control-allow-origin" not in resp_denied.headers
+
+
+# =========================================================================
+# Part C: Environment Variable Settings Source Regression Tests
+# =========================================================================
+
+def test_cors_env_var_comma_separated(monkeypatch):
+    """Verify Settings parses comma-separated CORS_ORIGINS from environment variables (Render format)."""
+    monkeypatch.setenv(
+        "CORS_ORIGINS",
+        "http://localhost:5173,http://127.0.0.1:5173,https://app.trustvault.example.com",
+    )
+    settings = Settings()
+    assert settings.CORS_ORIGINS == [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "https://app.trustvault.example.com",
+    ]
+
+
+def test_cors_env_var_comma_separated_with_whitespace_and_slashes(monkeypatch):
+    """Verify Settings normalizes whitespace and trailing slashes from env var."""
+    monkeypatch.setenv(
+        "CORS_ORIGINS",
+        "  http://localhost:5173/  ,  https://app.trustvault.example.com/  ",
+    )
+    settings = Settings()
+    assert settings.CORS_ORIGINS == [
+        "http://localhost:5173",
+        "https://app.trustvault.example.com",
+    ]
+
+
+def test_cors_env_var_json_array(monkeypatch):
+    """Verify Settings continues to support JSON-encoded list from environment variables."""
+    monkeypatch.setenv(
+        "CORS_ORIGINS",
+        '["http://localhost:5173", "https://app.trustvault.example.com"]',
+    )
+    settings = Settings()
+    assert settings.CORS_ORIGINS == [
+        "http://localhost:5173",
+        "https://app.trustvault.example.com",
+    ]
+
+
+def test_cors_env_var_single_origin(monkeypatch):
+    """Verify Settings supports a single origin from environment variables."""
+    monkeypatch.setenv("CORS_ORIGINS", "https://trustvault.onrender.com")
+    settings = Settings()
+    assert settings.CORS_ORIGINS == ["https://trustvault.onrender.com"]
+
+
+def test_cors_env_var_wildcard_rejected(monkeypatch):
+    """Verify Settings rejects wildcard in environment variable."""
+    monkeypatch.setenv("CORS_ORIGINS", "*")
+    with pytest.raises(ValueError, match="Wildcard CORS origin"):
+        Settings()
+
+
+def test_cors_env_var_wildcard_in_json_list_rejected(monkeypatch):
+    """Verify Settings rejects wildcard inside JSON list in environment variable."""
+    monkeypatch.setenv("CORS_ORIGINS", '["http://localhost:5173", "*"]')
+    with pytest.raises(ValueError, match="Wildcard CORS origin"):
+        Settings()
+
+
+def test_cors_env_var_invalid_scheme_rejected(monkeypatch):
+    """Verify Settings rejects invalid origin scheme from environment variable."""
+    monkeypatch.setenv("CORS_ORIGINS", "ftp://evil.com,http://localhost:5173")
+    with pytest.raises(ValueError):
+        Settings()
+
+
+def test_cors_env_var_middleware_integration(monkeypatch):
+    """Verify CORSMiddleware functions properly when origins are loaded from comma-separated env var."""
+    monkeypatch.setenv(
+        "CORS_ORIGINS",
+        "https://frontend.onrender.com,https://trustvault.example.com",
+    )
+    env_settings = Settings()
+
+    test_app = FastAPI()
+    test_app.add_middleware(
+        CORSMiddleware,
+        allow_origins=env_settings.CORS_ORIGINS,
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["*"],
+    )
+
+    @test_app.get("/health")
+    def health():
+        return {"status": "ok"}
+
+    with TestClient(test_app) as client:
+        # Preflight from first allowed origin
+        resp1 = client.options(
+            "/health",
+            headers={
+                "Origin": "https://frontend.onrender.com",
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+        assert resp1.status_code == 200
+        assert resp1.headers.get("access-control-allow-origin") == "https://frontend.onrender.com"
+        assert resp1.headers.get("access-control-allow-credentials") == "true"
+
+        # Preflight from second allowed origin
+        resp2 = client.options(
+            "/health",
+            headers={
+                "Origin": "https://trustvault.example.com",
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+        assert resp2.status_code == 200
+        assert resp2.headers.get("access-control-allow-origin") == "https://trustvault.example.com"
+        assert resp2.headers.get("access-control-allow-credentials") == "true"
+
+        # Untrusted origin
+        resp_blocked = client.options(
+            "/health",
+            headers={
+                "Origin": "https://unauthorized-origin.com",
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+        assert "access-control-allow-origin" not in resp_blocked.headers

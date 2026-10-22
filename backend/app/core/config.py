@@ -3,7 +3,31 @@ from pathlib import Path
 from typing import Any, Dict, List, Literal
 from urllib.parse import urlsplit
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import (
+    BaseSettings,
+    DotEnvSettingsSource,
+    EnvSettingsSource,
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+)
+
+
+class CustomEnvSettingsSource(EnvSettingsSource):
+    """Custom environment settings source that prevents premature JSON parsing for CORS_ORIGINS."""
+
+    def decode_complex_value(self, field_name: str, field: Any, value: Any) -> Any:
+        if field_name == "CORS_ORIGINS":
+            return value
+        return super().decode_complex_value(field_name, field, value)
+
+
+class CustomDotEnvSettingsSource(DotEnvSettingsSource):
+    """Custom .env settings source that prevents premature JSON parsing for CORS_ORIGINS."""
+
+    def decode_complex_value(self, field_name: str, field: Any, value: Any) -> Any:
+        if field_name == "CORS_ORIGINS":
+            return value
+        return super().decode_complex_value(field_name, field, value)
 
 
 class Settings(BaseSettings):
@@ -54,6 +78,27 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        if isinstance(env_settings, EnvSettingsSource):
+            env_settings.__class__ = CustomEnvSettingsSource
+        else:
+            env_settings = CustomEnvSettingsSource(settings_cls)
+
+        if isinstance(dotenv_settings, DotEnvSettingsSource):
+            dotenv_settings.__class__ = CustomDotEnvSettingsSource
+        else:
+            dotenv_settings = CustomDotEnvSettingsSource(settings_cls)
+
+        return init_settings, env_settings, dotenv_settings, file_secret_settings
 
     @field_validator("MAX_UPLOAD_SIZE_MB")
     @classmethod
