@@ -15,7 +15,6 @@ from app.core.database import (
     get_db,
     init_indexes,
 )
-from app.core.object_storage import is_r2_configured
 
 logger = logging.getLogger("trustvault.main")
 
@@ -26,16 +25,6 @@ async def lifespan(app: FastAPI):
     Application lifespan context manager.
     Handles startup configuration and clean teardown of database connections.
     """
-    # Strict production validation: ensure persistent object storage is configured
-    if settings.APP_ENV == "production" and not is_r2_configured(settings):
-        logger.critical(
-            "Production startup aborted: Cloudflare R2 object storage credentials are required in production."
-        )
-        raise RuntimeError(
-            "Cloudflare R2 object storage credentials (R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY) "
-            "must be configured when APP_ENV is 'production'."
-        )
-
     # Attempt index initialization; log sanitized error on failure without silently swallowing
     try:
         await init_indexes(get_db())

@@ -30,12 +30,6 @@ from app.core.authorization import (
 )
 from app.core.config import settings
 from app.core.file_validation import validate_file_content
-from app.core.object_storage import (
-    delete_from_r2,
-    download_from_r2,
-    is_r2_configured,
-    upload_to_r2,
-)
 from app.models.audit import AuditAction, AuditOutcome
 from app.models.document import (
     DocumentInDB,
@@ -300,53 +294,32 @@ async def upload_document(
     # 3. Build a UUID-based storage filename to prevent path traversal
     # -----------------------------------------------------------------------
     storage_filename = f"{uuid.uuid4().hex}{extension}"
-    object_key = f"{current_user.id}/{storage_filename}"
+    storage_root = _resolve_storage_root()
+    # Isolate each owner's documents in their own subdirectory
+    owner_dir = storage_root / current_user.id
+    owner_dir.mkdir(parents=True, exist_ok=True)
+    storage_path = owner_dir / storage_filename
 
     # -----------------------------------------------------------------------
-    # 4. Persist file to storage (with cleanup on failure)
+    # 4. Persist file to private storage (with cleanup on failure)
     # -----------------------------------------------------------------------
-    if is_r2_configured(settings):
+    try:
+        storage_path.write_bytes(content)
+    except OSError as exc:
+        # Clean up any partial file that may have been created
         try:
-            await upload_to_r2(object_key, content, content_type)
-        except Exception as exc:
-            try:
-                await delete_from_r2(object_key)
-            except Exception:
-                pass
-            logger.error(
-                "Failed to write document to object storage for user %s: %s",
-                current_user.id,
-                exc.__class__.__name__,
-            )
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Document storage failed. Please try again later.",
-            ) from None
-        stored_path_value = object_key
-    else:
-        storage_root = _resolve_storage_root()
-        # Isolate each owner's documents in their own subdirectory
-        owner_dir = storage_root / current_user.id
-        owner_dir.mkdir(parents=True, exist_ok=True)
-        storage_path = owner_dir / storage_filename
-        try:
-            storage_path.write_bytes(content)
-        except OSError as exc:
-            # Clean up any partial file that may have been created
-            try:
-                storage_path.unlink(missing_ok=True)
-            except OSError:
-                pass
-            logger.error(
-                "Failed to write document to storage for user %s: %s",
-                current_user.id,
-                exc.__class__.__name__,
-            )
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Document storage failed. Please try again later.",
-            ) from None
-        stored_path_value = str(storage_path)
+            storage_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        logger.error(
+            "Failed to write document to storage for user %s: %s",
+            current_user.id,
+            exc.__class__.__name__,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Document storage failed. Please try again later.",
+        ) from None
 
     # -----------------------------------------------------------------------
     # 5. Persist metadata record to MongoDB
@@ -356,7 +329,7 @@ async def upload_document(
         content_type=content_type,
         size_bytes=len(content),
         owner_id=current_user.id,
-        storage_path=stored_path_value,
+        storage_path=str(storage_path),
         description=description,
         category=category,
     )
@@ -374,16 +347,10 @@ async def upload_document(
         )
     except PyMongoError as exc:
         # Roll back stored file to avoid orphaned storage
-        if is_r2_configured(settings):
-            try:
-                await delete_from_r2(object_key)
-            except Exception:
-                pass
-        else:
-            try:
-                storage_path.unlink(missing_ok=True)
-            except OSError:
-                pass
+        try:
+            storage_path.unlink(missing_ok=True)
+        except OSError:
+            pass
         logger.error(
             "Database error while saving document metadata for user %s: %s",
             current_user.id,
@@ -646,32 +613,8 @@ async def download_document(
         )
 
     file_path = Path(storage_path_str)
-    filename = doc.get("filename") or "document"
-    content_type = doc.get("content_type") or "application/octet-stream"
-
-    if file_path.is_file():
-        # Stored on local filesystem (dev / tests / cached files)
-        await record_audit_event(
-            db,
-            action=AuditAction.DOCUMENT_DOWNLOAD,
-            outcome=AuditOutcome.SUCCESS,
-            actor_id=current_user.id,
-            document_id=document_id,
-            status_code=200,
-            request=request,
-        )
-
-        return FileResponse(
-            path=str(file_path),
-            filename=filename,
-            media_type=content_type,
-        )
-
-    # File not found on local filesystem; retrieve from Cloudflare R2 / S3
-    try:
-        file_bytes = await download_from_r2(storage_path_str)
-    except FileNotFoundError:
-        logger.error("Stored file for document %s is missing from storage", document_id)
+    if not file_path.is_file():
+        logger.error("Stored file for document %s is missing from filesystem", document_id)
         await record_audit_event(
             db,
             action=AuditAction.DOCUMENT_DOWNLOAD,
@@ -686,12 +629,9 @@ async def download_document(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Document file not found.",
         )
-    except Exception as exc:
-        logger.error("Failed to retrieve document %s from storage: %s", document_id, exc)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to retrieve document from storage.",
-        )
+
+    filename = doc.get("filename") or "document"
+    content_type = doc.get("content_type") or "application/octet-stream"
 
     await record_audit_event(
         db,
@@ -703,10 +643,10 @@ async def download_document(
         request=request,
     )
 
-    return Response(
-        content=file_bytes,
+    return FileResponse(
+        path=str(file_path),
+        filename=filename,
         media_type=content_type,
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 
@@ -920,16 +860,6 @@ async def delete_document(
     # 2. Safe storage cleanup
     storage_path_str = doc.get("storage_path")
     if storage_path_str:
-        if is_r2_configured(settings):
-            try:
-                await delete_from_r2(storage_path_str)
-            except Exception as exc:
-                logger.error(
-                    "Stored object cleanup failed for document %s user %s: %s",
-                    actual_doc_id,
-                    current_user.id,
-                    exc.__class__.__name__,
-                )
         try:
             file_path = Path(storage_path_str).resolve()
             storage_root = _resolve_storage_root().resolve()
