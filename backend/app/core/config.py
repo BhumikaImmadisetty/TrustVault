@@ -72,6 +72,24 @@ class Settings(BaseSettings):
         description="Allowed CORS origins for the frontend application",
     )
 
+    # Object storage (Cloudflare R2 / S3-compatible)
+    R2_ACCOUNT_ID: str = Field(
+        default="", repr=False, description="Cloudflare account ID for R2 storage"
+    )
+    R2_ACCESS_KEY_ID: str = Field(
+        default="", repr=False, description="R2 API access key ID"
+    )
+    R2_SECRET_ACCESS_KEY: str = Field(
+        default="", repr=False, description="R2 API secret access key"
+    )
+    R2_BUCKET_NAME: str = Field(
+        default="trustvault-documents", description="R2 bucket name for documents"
+    )
+    R2_ENDPOINT_URL: str = Field(
+        default="",
+        description="Optional custom endpoint URL override for S3-compatible storage",
+    )
+
     model_config = SettingsConfigDict(
         # Looks for .env in current working directory and in backend/.env
         env_file=(".env", "backend/.env"),
@@ -196,6 +214,16 @@ class Settings(BaseSettings):
         """Helper property to convert MAX_UPLOAD_SIZE_MB to bytes."""
         return self.MAX_UPLOAD_SIZE_MB * 1024 * 1024
 
+    @property
+    def is_r2_configured(self) -> bool:
+        """Return True if Cloudflare R2 / S3 credentials and bucket are configured."""
+        return bool(
+            (self.R2_ACCOUNT_ID or self.R2_ENDPOINT_URL)
+            and self.R2_ACCESS_KEY_ID
+            and self.R2_SECRET_ACCESS_KEY
+            and self.R2_BUCKET_NAME
+        )
+
     def get_safe_summary(self) -> Dict[str, Any]:
         """
         Return a dictionary of configuration settings with sensitive values masked.
@@ -203,6 +231,10 @@ class Settings(BaseSettings):
         """
         data = self.model_dump()
         data["SECRET_KEY"] = "***MASKED***"
+        if self.R2_ACCESS_KEY_ID:
+            data["R2_ACCESS_KEY_ID"] = "***MASKED***"
+        if self.R2_SECRET_ACCESS_KEY:
+            data["R2_SECRET_ACCESS_KEY"] = "***MASKED***"
         # Mask credentials in MONGODB_URI if any exist
         if "@" in self.MONGODB_URI:
             data["MONGODB_URI"] = "mongodb://***:***@" + self.MONGODB_URI.split("@", 1)[1]
